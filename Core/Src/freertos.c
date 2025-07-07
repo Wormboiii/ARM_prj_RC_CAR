@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,14 +48,21 @@ extern UART_HandleTypeDef huart6;
 /* USER CODE BEGIN Variables */
 uint8_t rxData[2];
 uint8_t btrxData[2];
+
 int fwState;
 int bwState;
 int footBreak;
-int gearShift;
+volatile int gearShift;
 int handleState;
 int gearSignal;
 
 uint16_t dutyRate = 500;
+
+volatile uint8_t tx_busy = 0;
+
+char gear0[] = "z";
+char gear1[] = "o";
+char gear2[] = "t";
 /* USER CODE END Variables */
 /* Definitions for MOTOR_CONTROL */
 osThreadId_t MOTOR_CONTROLHandle;
@@ -132,6 +139,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	}
 
 }
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART6) {
+        tx_busy = 0;
+    }
+}
 /* USER CODE END FunctionPrototypes */
 
 void START_MOTOR_CONTROL(void *argument);
@@ -197,6 +210,7 @@ void MX_FREERTOS_Init(void) {
 void START_MOTOR_CONTROL(void *argument)
 {
   /* USER CODE BEGIN START_MOTOR_CONTROL */
+	int prevGearShift = -1;
   /* Infinite loop */
 	for(;;)
 	{
@@ -204,20 +218,38 @@ void START_MOTOR_CONTROL(void *argument)
 			TIM4->CCR1 = 0;
 			TIM4->CCR2 = 0;
 			dutyRate = 500;
+//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear0, strlen(gear0));
 		}
 		else if(gearShift == 1) {
 			TIM4->CCR1 = 0;
 			TIM4->CCR2 = 0;
 			dutyRate = 700;
+//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear1, strlen(gear1));
 		}
 		else if(gearShift == 2) {
 			TIM4->CCR1 = 0;
 			TIM4->CCR2 = 0;
 			dutyRate = 900;
+//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear2, strlen(gear2));
 		}
 		if(footBreak == 1) {
 			TIM4->CCR1 = 0;
 			TIM4->CCR2 = 0;
+		}
+
+
+		if(gearShift != prevGearShift && tx_busy == 0) {
+			prevGearShift = gearShift;
+			tx_busy = 1;
+			if(gearShift == 0) {
+				HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear0, strlen(gear0));
+			}
+			else if(gearShift == 1) {
+				HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear1, strlen(gear1));
+			}
+			else if(gearShift == 2) {
+				HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear2, strlen(gear2));
+			}
 		}
     osDelay(10);
   }
@@ -271,14 +303,14 @@ void Start_gearTask(void *argument)
 			if(gearShift > 0) {
 				gearShift -= 1;
 			}
-			HAL_Delay(100);
+			HAL_Delay(150);
 			gearSignal = 0;
 		}
 		else if(gearSignal == 2) {
 			if(gearShift < 2) {
 				gearShift += 1;
 			}
-			HAL_Delay(100);
+			HAL_Delay(150);
 			gearSignal = 0;
 		}
     osDelay(10);
