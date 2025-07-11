@@ -26,12 +26,17 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include "motor.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart6;
+
+extern TIM_HandleTypeDef htim5;
+extern TIM_HandleTypeDef htim9;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -48,15 +53,18 @@ extern UART_HandleTypeDef huart6;
 /* USER CODE BEGIN Variables */
 uint8_t rxData[2];
 uint8_t btrxData[2];
+uint8_t honkState;
+uint8_t tlSignal;
+uint8_t trSignal;
+uint8_t brkSignal;
 
 int fwState;
 int bwState;
 int footBreak;
-volatile int gearShift;
 int handleState;
 int gearSignal;
 
-uint16_t dutyRate = 500;
+volatile int gearShift;
 
 volatile uint8_t tx_busy = 0;
 
@@ -91,44 +99,32 @@ const osThreadAttr_t gearTask_attributes = {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	HAL_UART_Receive_DMA(&huart6, btrxData, 1);
 
-	// 블투
-	if(btrxData[0] == 'w') {
+	if(btrxData[0] == 'b') {
+		allStop();
+		brkSignal = 0xff;
+	}
 
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
-			TIM4->CCR1 = dutyRate;
-			TIM4->CCR2 = dutyRate;
+	else if(btrxData[0] == 'w') {
+		moveForward();
+		tlSignal = 0x00;
+		trSignal = 0x00;
+		brkSignal = 0x00;
 	}
 	else if(btrxData[0] == 's') {
-
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET);
-			TIM4->CCR1 = dutyRate;
-			TIM4->CCR2 = dutyRate;
+		moveBackward();
+		tlSignal = 0x00;
+		trSignal = 0x00;
+		brkSignal = 0x00;
 	}
-
 	else if(btrxData[0] == 'a') {
-		TIM4->CCR1 = 0;
-		TIM4->CCR2 = dutyRate;
+		turnLeft();
+		brkSignal = 0x00;
 	}
 	else if(btrxData[0] == 'd') {
-		TIM4->CCR1 = dutyRate;
-		TIM4->CCR2 = 0;
+		turnRight();
+		brkSignal = 0x00;
 	}
 
-//	else if(btrxData[0] == 'x') {
-//		footBreak = 1;
-//		gearShift = 0;
-//	}
-//	else if(btrxData[0] == 'i') {
-//		gearShift = 0;
-//		fwState = 0;
-//		bwState = 0;
-//	}
 
 
 	if(btrxData[0] == 'l') {
@@ -138,7 +134,22 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		gearSignal = 2;
 	}
 
+
+	if(btrxData[0] == 'h') {
+		honkState = ~honkState;
+	}
+
+
+	if(btrxData[0] == 'q') {
+		tlSignal = ~tlSignal;
+	}
+	else if(btrxData[0] == 'e') {
+		trSignal = ~trSignal;
+	}
+
 }
+
+
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART6) {
@@ -162,6 +173,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 	HAL_UART_Receive_DMA(&huart2, rxData, 1);
 	HAL_UART_Receive_DMA(&huart6, btrxData, 1);
+	HAL_TIM_Base_Start(&htim5);
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -215,26 +227,16 @@ void START_MOTOR_CONTROL(void *argument)
 	for(;;)
 	{
 		if(gearShift == 0) {
-			TIM4->CCR1 = 0;
-			TIM4->CCR2 = 0;
-			dutyRate = 500;
-//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear0, strlen(gear0));
+			gearZero();
 		}
 		else if(gearShift == 1) {
-			TIM4->CCR1 = 0;
-			TIM4->CCR2 = 0;
-			dutyRate = 700;
-//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear1, strlen(gear1));
+			gearFirst();
 		}
 		else if(gearShift == 2) {
-			TIM4->CCR1 = 0;
-			TIM4->CCR2 = 0;
-			dutyRate = 900;
-//			HAL_UART_Transmit_DMA(&huart6, (uint8_t *)gear2, strlen(gear2));
+			gearSecond();
 		}
 		if(footBreak == 1) {
-			TIM4->CCR1 = 0;
-			TIM4->CCR2 = 0;
+			allStop();
 		}
 
 
@@ -269,17 +271,36 @@ void START_UART_TASK(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  if(fwState == 1) {
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+	  if(honkState == 0x00) {
+		  TIM11->CCR1 = 0;
 	  }
-	  else if(bwState == 1) {
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_SET);
+	  else if(honkState == 0xff) {
+		  TIM11->CCR1 = 194;
+	  }
+
+	  if(tlSignal == 0x00) {
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
+		  HAL_TIM_Base_Stop_IT(&htim5);
+	  }
+	  else if(tlSignal == 0xff) {
+		  HAL_TIM_Base_Start_IT(&htim5);
+	  }
+
+	  if(trSignal == 0x00) {
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+		  HAL_TIM_Base_Stop_IT(&htim9);
+	  }
+	  else if(trSignal == 0xff) {
+		  HAL_TIM_Base_Start_IT(&htim9);
+	  }
+
+	  if(brkSignal == 0xff) {
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_SET);
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);
+	  }
+	  else if(brkSignal == 0x00) {
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3, GPIO_PIN_RESET);
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
 	  }
 	  osDelay(10);
   }
@@ -303,14 +324,14 @@ void Start_gearTask(void *argument)
 			if(gearShift > 0) {
 				gearShift -= 1;
 			}
-			HAL_Delay(150);
+			HAL_Delay(200);
 			gearSignal = 0;
 		}
 		else if(gearSignal == 2) {
 			if(gearShift < 2) {
 				gearShift += 1;
 			}
-			HAL_Delay(150);
+			HAL_Delay(200);
 			gearSignal = 0;
 		}
     osDelay(10);
